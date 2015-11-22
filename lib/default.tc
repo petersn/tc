@@ -160,10 +160,11 @@ function:str_concat
 	var:result
 endvars
 	str1 :str_len str2 :str_len + =total_length
-	total_length WORDSIZE + :malloc =result
+	total_length WORDSIZE + 1 + :malloc =result
 	total_length 0 result @=
 	result WORDSIZE + str1 :to_char* str1 :str_len :memmove
 	result WORDSIZE + str1 :str_len + str2 :to_char* str2 :str_len :memmove
+	0 total_length WORDSIZE + result @c=
 	result
 endfunc
 

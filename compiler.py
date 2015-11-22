@@ -133,6 +133,9 @@ predef = {
 	"*": ["pop rax", "imul qword [rsp]", "mov [rsp], rax"],
 	"/": ["pop rbx", "pop rax", "xor rdx, rdx", "idiv rbx", "push rax"],
 	"%": ["pop rbx", "pop rax", "xor rdx, rdx", "idiv rbx", "push rdx"],
+	"|": ["pop rax", "or [rsp], rax"],
+	"&": ["pop rax", "and [rsp], rax"],
+
 	"@": ["pop rax", "pop rbx", "push qword [rax+rbx*8]"],
 	"@=": ["pop rax", "pop rbx", "pop qword [rax+rbx*8]"],
 	"@c": ["pop rax", "pop rbx", "xor rcx, rcx", "mov cl, [rax+rbx]", "push rcx"],
@@ -198,6 +201,11 @@ def build(code):
 	token, mode = "", "main"
 	code_index = -1
 	code = list(code + " ")
+	# Because I want continue to still increment code_index,
+	# I do the unconventional thing of incrementing code_index
+	# at the top of the while loop. As a result, the condition
+	# must be code_index < len(code)-1 instead of the more
+	# typical code_index < len(code).
 	while code_index < len(code)-1:
 		code_index += 1
 		c = code[code_index]
@@ -362,8 +370,8 @@ def build(code):
 	s = asm_template % {"date": time.strftime("%Y-%m-%d %H:%M:%S"), "externs": externs, "data": data, "main_code": main_code}
 	with open("/tmp/code.asm", "w") as f:
 		print >>f, s
-	os.system("nasm -f elf64 /tmp/code.asm")
-	os.system("gcc /tmp/code.o -o /tmp/code")
+	assert os.system("nasm -f elf64 /tmp/code.asm") == 0
+	assert os.system("gcc /tmp/code.o -o /tmp/code") == 0
 
 if __name__ == "__main__":
 	import sys

@@ -1,0 +1,133 @@
+# tc bootstrap compiler.
+
+include:default.tc
+
+function:print_list
+	arg:l
+	var:i var:len
+endvars
+	l :list_len =len
+	0 =i
+	loop
+		i len < while
+		i l :list_@ :puts
+		i 1 + =i
+	end
+endfunc
+
+function:compile
+	arg:input_string
+
+	# Basic data structures.
+	var:output_code
+	var:strings
+	var:flow_stack
+
+	var:externs
+	var:functions
+	var:current_function
+
+	# Parsing data.
+	var:parse_mode
+	var:text_index
+	var:char
+	var:is_whitespace
+	var:token
+	var:char_buf_string
+
+	# Constants.
+	var:PARSE_MAIN
+	var:PARSE_COMMENT
+endvars
+	1 =PARSE_MAIN
+	2 =PARSE_COMMENT
+
+	" " :str_duplicate =char_buf_string
+
+	PARSE_MAIN =parse_mode
+	0 =text_index
+	"" :str_duplicate =token
+	# Main loop over the input characters.
+	loop
+		text_index input_string :str_len < while
+		# Get the current character.
+		text_index input_string :str_@ =char
+		char 9 == char 10 == char 32 == | | =is_whitespace
+
+		parse_mode PARSE_MAIN == if
+			# Check if we've hit the end of a valid token.
+			is_whitespace if
+				token :str_len 0 != if
+					'Got token: (%i) ' token :str_len :printf:2 token :to_char* :puts
+					token :free
+					"" :str_duplicate =token
+				end
+			else
+				char 35 == if
+					PARSE_COMMENT =parse_mode
+				else
+					# Otherwise, it's a character to be appended on.
+					char 0 char_buf_string :to_char* @c=
+					token
+						token char_buf_string :str_concat =token
+					:free
+				end
+			end
+		else
+			parse_mode PARSE_COMMENT == 10 char == & if
+				PARSE_MAIN =parse_mode
+			end
+		end
+
+		text_index 1 + =text_index
+	end
+endfunc
+
+function:main
+	arg:argc arg:argv
+
+	var:s
+	var:path
+	var:fd
+	var:page
+	var:bytes_read
+endvars
+	# Make sure we have the right number of arguments.
+	argc 2 != if
+		'Usage: tcc input' :puts
+		0 :exit
+	end
+
+	1 argv @ =path
+	'Reading: %s\n' path :printf:2
+	# Open up the input for reading.
+	# Note: 0 is equivalent to O_RDONLY.
+	path 0 :open =fd
+	fd -1 == if
+		'Failed to open input for reading.' :puts
+		1 :exit
+	end
+
+	# Read in the entire thing.
+	# TODO: Make this not take quadratic time.
+	"" :str_duplicate =s
+	4096 WORDSIZE + :malloc =page
+	loop
+		fd page WORDSIZE + 4096 :read =bytes_read
+		bytes_read 0 page @=
+		bytes_read 0 != while
+		# Concatenate the code on.
+		s
+			s page :str_concat =s
+		:free
+	end
+	page :free
+	fd :close
+	'File length: %i\n' s :str_len :printf:2
+
+	# Call out to the compiler.
+	s :compile
+endfunc
+
+:main
+
