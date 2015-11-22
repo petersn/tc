@@ -1,0 +1,210 @@
+# The default standard library for tc.
+
+# Declare some functions from libc.
+extern:printf:*:0
+extern:puts:1:0
+extern:atoi:1:1
+extern:malloc:1:1
+extern:free:1:0
+extern:strlen:1:1
+extern:memmove:3:0
+extern:memcmp:3:1
+extern:exit:1:0
+
+# Filesystem operations.
+extern:open:2:1
+extern:close:1:0
+extern:read:3:1
+extern:write:3:1
+
+# Allocate a 1 MiB scratch space to use for our special stack.
+1048576 :malloc
+>>> mov r15, [rsp]
+drop
+
+# Allocate a 256 MiB scratch space for the traceback stack.
+262144 :malloc
+>>> mov rax, [rsp]
+# Clear out the bottom entry as a sentinel.
+>>> mov qword [rax], 0
+>>> add rax, WORDSIZE
+>>> mov [TracebackStackPointer], rax
+drop
+
+# Define the standard library routines.
+function:array
+	arg:size
+endvars
+	size WORDSIZE * :malloc
+endfunc
+
+# Dumps the traceback stack.
+function:print_traceback
+	var:ptr
+	var:tmp
+	var:func_name
+endvars
+	'Traceback:' :puts
+	# Extract the traceback pointer.
+	>>> push qword [TracebackStackPointer]
+	=ptr
+	# Loop backwards from ptr until we hit the sentinel.
+	ptr =tmp
+	loop
+		# While the temp doesn't point to null.
+		0 tmp @ 0 != while
+		tmp WORDSIZE - =tmp
+	end
+	tmp WORDSIZE + =tmp
+	# Now print forwards from tmp until we hit ptr.
+	loop
+		tmp ptr <= while
+		0 tmp @ =func_name
+		1 ' -- ' 4 :write func_name :puts
+		tmp WORDSIZE + =tmp
+	end
+endfunc
+
+# Print out some bad news.
+function:exception
+	arg:s
+endvars
+	:print_traceback
+	'=== Exception raised ===' :puts
+	s WORDSIZE + :puts
+	1 :exit
+endfunc
+
+# ========== Strings.
+
+# Take a c-style string and give a string.
+function:to_str
+	arg:ptr
+	var:len
+	var:result
+endvars
+	# Get the length of the string.
+	ptr :strlen =len
+	# Allocate the buffer.
+	len WORDSIZE + :malloc =result
+	# Write the length field in.
+	len 0 result @=
+	# Copy the data in.
+	result WORDSIZE + ptr len :memmove
+	result
+endfunc
+
+# Extract the c-style string from a string.
+function:to_char*
+	arg:str
+endvars
+	str WORDSIZE +
+endfunc
+
+# Get length of a string.
+function:str_len
+	arg:str
+endvars
+	0 str @
+endfunc
+
+# Duplicate a string.
+function:str_duplicate
+	arg:str
+	var:length
+	var:result
+endvars
+	str :str_len =length
+	length WORDSIZE + :malloc =result
+	length 0 result @=
+	result WORDSIZE + str :to_char* length :memmove
+	result
+endfunc
+
+# Compare strings.
+function:str_cmp
+	arg:str1 arg:str2
+endvars
+	# If the strings aren't the same length, then we're doomed.
+	str1 :str_len str2 :str_len != if
+		0 return
+	end
+	str1 :to_char* str2 :to_char* str1 :str_len :memcmp 0 ==
+endfunc
+
+# Concatenate strings.
+function:str_concat
+	arg:str1 arg:str2
+	var:total_length
+	var:result
+endvars
+	str1 :str_len str2 :str_len + =total_length
+	total_length WORDSIZE + :malloc =result
+	total_length 0 result @=
+	result WORDSIZE + str1 :to_char* str1 :str_len :memmove
+	result WORDSIZE + str1 :str_len + str2 :to_char* str2 :str_len :memmove
+	result
+endfunc
+
+# Wrap an index appropriately for a string.
+function:str_index_wrap
+	arg:index arg:str
+endvars
+	index 0 < if
+		index str :str_len + =index
+	end
+	index 0 < if
+		"String index too low." :exception
+	end
+	index str :str_len >= if
+		"String index too high." :exception
+	end
+	index
+endfunc
+
+# Index a character from a string.
+function:str_@
+	arg:index arg:str
+endvars
+	index str :str_index_wrap str :to_char* @c
+endfunc
+
+# Get a substring of a string.
+function:str_take_suffix
+	arg:count arg:str
+	var:new_length
+	var:result
+endvars
+	count 0 < if
+		"Attempting to negatively shorten a string." :exception
+	end
+	str :str_len count - =new_length
+	new_length 0 < if
+		"Shortening string to less than nothing." :exception
+	end
+	new_length WORDSIZE + :malloc =result
+	new_length 0 result @=
+	result WORDSIZE + str :to_char* count + new_length :memmove
+	result
+endfunc
+
+# ========== Lists.
+
+# Define list setters and getters.
+function:list_len arg:list endvars 0 list @ endfunc
+function:list_=len arg:list endvars 0 list @= endfunc
+function:list_maxlen arg:list endvars 1 list @ endfunc
+function:list_=maxlen arg:list endvars 1 list @= endfunc
+function:list_buf arg:list endvars 2 list @ endfunc
+function:list_=buf arg:list endvars 2 list @= endfunc
+
+function:new_list
+	var:l
+	var:initial_buf
+endvars
+	WORDSIZE 3 * :malloc =l
+	WORDSIZE 4 * :malloc =initial_buf
+	0 l :list_=len
+	8 l 
+endfunc
+
