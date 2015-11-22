@@ -23,11 +23,14 @@ main:
 	; Grab argc and argv.
 	mov [Stash_argc], rdi
 	mov [Stash_argv], rsi
-
 	; Push some sentinels to make stack underflows easy to spot.
 	push 0xffffffffdeadbeef
 	push 0xffffffffdeadbeef
 	push 0xffffffffdeadbeef
+	; Push argc and argv themselves.
+	push rdi
+	push rsi
+
 %(main_code)s
 
 	; Exit cleanly.
