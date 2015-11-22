@@ -32,6 +32,16 @@ drop
 >>> mov [TracebackStackPointer], rax
 drop
 
+function:get_argc
+endvars
+	>>> push qword [Stash_argc]
+endfunc
+
+function:get_argv
+endvars
+	>>> push qword [Stash_argv]
+endfunc
+
 # Dumps the traceback stack.
 function:print_traceback
 	var:ptr
