@@ -19,6 +19,10 @@ section .data
 section .text
 	global main
 main:
+	; Push some sentinels to make stack underflows easy to spot.
+	push 0xffffffffdeadbeef
+	push 0xffffffffdeadbeef
+	push 0xffffffffdeadbeef
 %(main_code)s
 
 	; Exit cleanly.
@@ -57,9 +61,21 @@ class Extern:
 		c = []
 		for reg in self.calling_convention[:self.num_args if self.num_args != "variable" else arg_count][::-1]:
 			c.append("pop %s" % reg)
-		c.append("push rbp")
-		c.append("call %s" % self.name)
-		c.append("pop rbp")
+		# Standard calling convention.
+		if arg_count == None:
+			c.extend([
+				"push rbp",
+				"call %s" % self.name,
+				"pop rbp",
+			])
+		# Variadic calling convention.
+		else:
+			c.extend([
+				"push rbp",
+				"xor rax, rax",
+				"call %s" % self.name,
+				"pop rbp",
+			])
 		if self.does_return:
 			c.append("push rax")
 		return c
@@ -340,36 +356,6 @@ def build(code):
 		print >>f, s
 	os.system("nasm -f elf64 /tmp/code.asm")
 	os.system("gcc /tmp/code.o -o /tmp/code")
-
-"""
-include:default.tc
-
-function:divmod
-	arg:x arg:y
-endvars
-	x y /
-	x y %
-endfunc
-
-function:ord
-	arg:x
-endvars
-	0 x @c
-endfunc
-
-function:main
-	var:x
-endvars
-	0 =x
-	loop
-		x 10 <= while
-		"Yay" :puts
-		x 1 + =x
-	end
-endfunc
-
-:main
-"""
 
 if __name__ == "__main__":
 	import sys

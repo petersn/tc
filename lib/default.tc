@@ -5,6 +5,7 @@ extern:printf:*:0
 extern:puts:1:0
 extern:atoi:1:1
 extern:malloc:1:1
+extern:realloc:2:1
 extern:free:1:0
 extern:strlen:1:1
 extern:memmove:3:0
@@ -73,6 +74,23 @@ endvars
 	'=== Exception raised ===' :puts
 	s WORDSIZE + :puts
 	1 :exit
+endfunc
+
+# Some useful utility functions.
+
+function:print_num
+	arg:x
+endvars
+	'%i' x :printf:2
+endfunc
+
+function:max
+	arg:x arg:y
+endvars
+	x y < if
+		y return
+	end
+	x
 endfunc
 
 # ========== Strings.
@@ -169,6 +187,12 @@ endvars
 	index str :str_index_wrap str :to_char* @c
 endfunc
 
+function:str_@=
+	arg:c arg:index arg:str
+endvars
+	c index str :str_index_wrap str :to_char* @c=
+endfunc
+
 # Get a substring of a string.
 function:str_take_suffix
 	arg:count arg:str
@@ -202,9 +226,211 @@ function:new_list
 	var:l
 	var:initial_buf
 endvars
+	# By default the list can contain 4 elements.
 	WORDSIZE 3 * :malloc =l
 	WORDSIZE 4 * :malloc =initial_buf
 	0 l :list_=len
-	8 l 
+	4 l :list_=maxlen
+	initial_buf l :list_=buf
+	l
+endfunc
+
+function:free_list
+	arg:l
+endvars
+	l :list_buf :free
+	l :free
+endfunc
+
+function:list_debug
+	arg:l
+endvars
+	'List:' :puts
+	'  Pointer: %p\n' l :printf:2
+	'  Length: %i\n' l :list_len :printf:2
+	'  Max length: %i\n' l :list_maxlen :printf:2
+	'  Buf: %p\n' l :list_buf :printf:2
+endfunc
+
+function:list_resize
+	arg:new_maxlen arg:l
+endvars
+	'Resizing list %p from %i to size %i.\n'
+		l l :list_maxlen new_maxlen :printf:4
+	new_maxlen l :list_len < if
+		"Attempting to resize a list to be shorter than its current length." :exception
+	end
+	# Reallocate its array.
+	l :list_buf WORDSIZE new_maxlen * :realloc l :list_=buf
+	new_maxlen l :list_=maxlen
+endfunc
+
+function:list_ensure_size
+	arg:at_least arg:l
+	var:new_maxlen
+endvars
+	l :list_maxlen at_least < if
+		# Resize to be either at_least or maxlen*2, whichever is more.
+		l :list_maxlen 2 * at_least :max =new_maxlen
+		new_maxlen l :list_resize
+	end
+endfunc
+
+# Wrap an index appropriately for a list.
+function:list_index_wrap
+	arg:index arg:l
+endvars
+	index 0 < if
+		index l :list_len + =index
+	end
+	index 0 < if
+		"List index too low." :exception
+	end
+	index l :list_len >= if
+		"List index too high." :exception
+	end
+	index
+endfunc
+
+# Index an object from a list.
+function:list_@
+	arg:index arg:l
+endvars
+	index l :list_index_wrap l :list_buf @
+endfunc
+
+# Index an object from a list.
+function:list_@=
+	arg:x arg:index arg:l
+endvars
+	x index l :list_index_wrap l :list_buf @=
+endfunc
+
+# Add a single value into a list.
+function:list_append
+	arg:x arg:l
+	var:length
+endvars
+	l :list_len =length
+	# Make sure the list can handle one more entry.
+	length 1 + l :list_ensure_size
+	# Increment the length.
+	length 1 + l :list_=len
+	# Insert the element.
+	x length l :list_@=
+endfunc
+
+function:list_pop
+	arg:l
+	var:length
+endvars
+	l :list_len =length
+	l 0 <= if
+		"Trying to pop from empty list" :exception
+	end
+	-1 l :list_@ # This is where the returned value is generated.
+	length 1 - l :list_=len
+endfunc
+
+# ========== Dictionary.
+# TODO: Make this not be the trivial linear time implementation.
+
+# Define dict setters and getters.
+function:dict_keys arg:dict endvars 0 dict @ endfunc
+function:dict_=keys arg:dict endvars 0 dict @= endfunc
+function:dict_values arg:dict endvars 1 dict @ endfunc
+function:dict_=values arg:dict endvars 1 dict @= endfunc
+
+function:new_dict
+	var:d
+endvars
+	# By default the list can contain 4 elements.
+	WORDSIZE 2 * :malloc =d
+	:new_list d :dict_=keys
+	:new_list d :dict_=values
+	d
+endfunc
+
+function:free_dict
+	arg:d
+endvars
+	d :dict_keys :free_list
+	d :dict_values :free_list
+	d :free
+endfunc
+
+function:dict_sanity_check
+	arg:d
+endvars
+	d :dict_keys :list_len d :dict_values :list_len != if
+		"Dictionary's keys and values lists are different lengths!" :exception
+	end
+endfunc
+
+function:dict_len
+	arg:d
+endvars
+	d :dict_sanity_check
+	d :dict_keys :list_len
+endfunc
+
+function:dict_get_index
+	arg:s arg:d
+	var:i
+	var:len var:keys
+endvars
+	d :dict_len =len
+	d :dict_keys =keys
+	0 =i
+	loop
+		i len < while
+		i keys :list_@ s :str_cmp if
+			i return
+		end
+		i 1 + =i
+	end
+	-1
+endfunc
+
+# Check if a given string is in the dictionary.
+function:dict_in
+	arg:s arg:d
+endvars
+	s d :dict_get_index -1 !=
+endfunc
+
+# Get a value from a dictionary.
+function:dict_get
+	arg:s arg:d
+	var:i
+endvars
+	s d :dict_get_index =i
+	i -1 == if
+		"Key " s :str_concat " not in dictionary." :str_concat :exception
+	end
+	i d :dict_values :list_@
+endfunc
+
+# Insert a value into the dictionary.
+function:dict_set
+	arg:x arg:s arg:d
+	var:i
+endvars
+	s d :dict_get_index =i
+	i -1 != if
+		# If the string is already in the dictionary, then just change the value.
+		x i d :dict_values :list_@=
+	else
+		# If the string's not in the dictionary, append it to the end.
+		s d :dict_keys :list_append
+		x d :dict_values :list_append
+	end
+endfunc
+
+# Delete a key from a dictionary.
+function:dict_erase
+	arg:s
+endvars
+	"Not implemented." :exception
 endfunc
 
