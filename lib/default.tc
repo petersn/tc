@@ -32,13 +32,6 @@ drop
 >>> mov [TracebackStackPointer], rax
 drop
 
-# Define the standard library routines.
-function:array
-	arg:size
-endvars
-	size WORDSIZE * :malloc
-endfunc
-
 # Dumps the traceback stack.
 function:print_traceback
 	var:ptr
