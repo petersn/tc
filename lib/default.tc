@@ -33,6 +33,8 @@ drop
 >>> mov [TracebackStackPointer], rax
 drop
 
+__ENABLE_LINE_BY_LINE_DEBUGGING__
+
 function:get_argc
 endvars
 	>>> push qword [Stash_argc]

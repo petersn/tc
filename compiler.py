@@ -165,12 +165,22 @@ def format_string_def(i, s):
 	s += "\0"
 	return "%s: db %s" % (tag, ",".join(hex(ord(c)) for c in s))
 
+def produce_line_numbers(code, filename):
+	line = 1
+	output = [(filename, line)]
+	for c in code:
+		output.append(c)
+		if c == "\n":
+			line += 1
+			output.append((filename, line))
+	return output
+
 def get_include_code(path):
 	for directory in search_path:
 		p = os.path.join(directory, path)
 		if os.path.exists(p):
 			with open(p) as f:
-				return f.read()
+				return produce_line_numbers(f.read(), path)
 	raise Exception("Couldn't find include: %r" % path)
 
 class FlowContext:
@@ -192,6 +202,7 @@ def build(code):
 	strings = []
 	context = []
 	flow_stack = []
+	debugging_support_established = False
 	def get_from_flow(name):
 		for flow in flow_stack[::-1]:
 			v = getattr(flow, name)
@@ -201,7 +212,7 @@ def build(code):
 	style_cstring = None
 	token, mode = "", "main"
 	code_index = -1
-	code = list(code + " ")
+	code.append(" ")
 	# Because I want continue to still increment code_index,
 	# I do the unconventional thing of incrementing code_index
 	# at the top of the while loop. As a result, the condition
@@ -210,15 +221,23 @@ def build(code):
 	while code_index < len(code)-1:
 		code_index += 1
 		c = code[code_index]
+		if isinstance(c, tuple):
+			if DEBUG_MODE and debugging_support_established:
+				location_format = c[0] + ":"
+				if most_recent_function != None:
+					location_format += most_recent_function.name
+				else:
+					location_format += "__root__"
+				location_format += ":%s" % c[1]
+				context.extend([
+					"mov r14, [TracebackStackPointer]",
+					"mov qword [r14], %s" % new_string(location_format),
+				])
+			continue
 		if mode == "main" and c in whitespace:
 			if token == "":
 				continue
 			context.append(";                 %s" % token)
-			if DEBUG_MODE:
-				context.extend([
-					"mov r14, [TracebackStackPointer]",
-					"mov qword [r14], %s" % new_string(token),
-				])
 			if token.startswith("extern:"):
 				_, name, num_args, does_return = token.split(":", 3)
 				externs[name] = Extern(name, int(num_args) if num_args != "*" else "variable", bool(int(does_return)))
@@ -301,6 +320,8 @@ def build(code):
 					most_recent_function.end_tag + ":",
 				])
 				most_recent_function = None
+			elif token == "__ENABLE_LINE_BY_LINE_DEBUGGING__":
+				debugging_support_established = True
 			elif token.startswith("function_pointer:"):
 				_, name = token.split(":", 1)
 				tag = functions[name].start_tag
@@ -389,6 +410,6 @@ if __name__ == "__main__":
 	import sys
 	assert len(sys.argv) == 2, "Usage: %s <input.tc>" % sys.argv[0]
 	with open(sys.argv[1]) as f:
-		data = f.read()
+		data = produce_line_numbers(f.read(), os.path.split(sys.argv[1])[1])
 	build(data)
 
