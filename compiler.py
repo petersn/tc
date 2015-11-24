@@ -135,6 +135,7 @@ predef = {
 	"%": ["pop rbx", "pop rax", "xor rdx, rdx", "idiv rbx", "push rdx"],
 	"|": ["pop rax", "or [rsp], rax"],
 	"&": ["pop rax", "and [rsp], rax"],
+	"not": ["pop rax", "and [rsp], rax"],
 
 	"@": ["pop rax", "pop rbx", "push qword [rax+rbx*8]"],
 	"@=": ["pop rax", "pop rbx", "pop qword [rax+rbx*8]"],
@@ -173,8 +174,8 @@ def get_include_code(path):
 	raise Exception("Couldn't find include: %r" % path)
 
 class FlowContext:
-	def __init__(self, code, break_point=None, continue_point=None):
-		self.code, self.break_point, self.continue_point = code, break_point, continue_point
+	def __init__(self, code, break_point=None, continue_point=None, elif_tag=None):
+		self.code, self.break_point, self.continue_point, self.elif_tag = code, break_point, continue_point, elif_tag
 
 whitespace = " \t\n"
 
@@ -249,6 +250,13 @@ def build(code):
 				flow_stack.append(FlowContext([
 					"%s:" % t,
 				]))
+			elif token == "elif":
+				t = flow_stack[-1].elif_tag
+				context.extend([
+					"pop rax",
+					"cmp rax, 0",
+					"je %s" % t,
+				])
 			elif token == "else":
 				t = get_tag()
 				context.extend([
@@ -258,7 +266,7 @@ def build(code):
 				context.extend(flow_stack.pop().code)
 				flow_stack.append(FlowContext([
 					"%s:" % t,
-				]))
+				], elif_tag=t))
 			elif token == "loop":
 				t1, t2 = get_tag(), get_tag()
 				context.append("%s:" % t1)
@@ -293,6 +301,10 @@ def build(code):
 					most_recent_function.end_tag + ":",
 				])
 				most_recent_function = None
+			elif token.startswith("function_pointer:"):
+				_, name = token.split(":", 1)
+				tag = functions[name].start_tag
+				context.append("push %s" % tag)
 			elif token.startswith(":"):
 				name = token[1:]
 				arg_count = None

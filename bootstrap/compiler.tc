@@ -15,6 +15,11 @@ endvars
 	end
 endfunc
 
+function:ord
+endvars
+	0 swap @c
+endfunc
+
 function:compile
 	arg:input_string
 
@@ -29,18 +34,22 @@ function:compile
 
 	# Parsing data.
 	var:parse_mode
+	var:string_mode_is_cstring
 	var:text_index
 	var:char
 	var:is_whitespace
 	var:token
+	var:string_literal
 	var:char_buf_string
 
 	# Constants.
 	var:PARSE_MAIN
 	var:PARSE_COMMENT
+	var:PARSE_STRING
 endvars
 	1 =PARSE_MAIN
 	2 =PARSE_COMMENT
+	3 =PARSE_STRING
 
 	" " :str_duplicate =char_buf_string
 
@@ -52,7 +61,7 @@ endvars
 		text_index input_string :str_len < while
 		# Get the current character.
 		text_index input_string :str_@ =char
-		char 9 == char 10 == char 32 == | | =is_whitespace
+		char '\t' :ord == char '\n' :ord == char ' ' :ord == | | =is_whitespace
 
 		parse_mode PARSE_MAIN == if
 			# Check if we've hit the end of a valid token.
@@ -62,22 +71,30 @@ endvars
 					token :free
 					"" :str_duplicate =token
 				end
+			else char '#' :ord == if
+				PARSE_COMMENT =parse_mode
+			else char '\'' :ord == char '"' :ord == | token :str_len 0 == & if
+				PARSE_STRING =parse_mode
+				char '\'' :ord == =string_mode_is_cstring
+				"" :str_duplicate =string_literal
 			else
-				char 35 == if
-					PARSE_COMMENT =parse_mode
-				else
-					# Otherwise, it's a character to be appended on.
-					char 0 char_buf_string :to_char* @c=
-					token
-						token char_buf_string :str_concat =token
-					:free
-				end
+				# Otherwise, it's a character to be appended on.
+				char 0 char_buf_string :to_char* @c=
+				token
+					token char_buf_string :str_concat =token
+				:free
+			end end end
+		else parse_mode PARSE_COMMENT == '\n' :ord char == & if
+			PARSE_MAIN =parse_mode
+		else parse_mode PARSE_STRING == if
+			# TODO: Keep writing here.
+			# This code is currently wrong, and we're segfaulting here.
+			'"' :ord char == not if
 			end
 		else
-			parse_mode PARSE_COMMENT == 10 char == & if
-				PARSE_MAIN =parse_mode
-			end
-		end
+#			'Mode: %i\n' parse_mode :printf:2
+#			"Shouldn't get here: " token :str_concat "." :str_concat :exception
+		end end end
 
 		text_index 1 + =text_index
 	end

@@ -11,6 +11,7 @@ extern:strlen:1:1
 extern:memmove:3:0
 extern:memcmp:3:1
 extern:exit:1:0
+extern:signal:2:1
 
 # Filesystem operations.
 extern:open:2:1
@@ -78,6 +79,16 @@ endvars
 	s WORDSIZE + :puts
 	1 :exit
 endfunc
+
+function:sigsegv_handler
+endvars
+	:print_traceback
+	'=== SIGSEGV received ===' :puts
+	1 :exit
+endfunc
+
+# Set this as our signal handler for signal 11, namely SIGSEGV.
+11 function_pointer:sigsegv_handler :signal drop
 
 # Some useful utility functions.
 
