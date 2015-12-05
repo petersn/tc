@@ -2,6 +2,7 @@
 
 # Declare some functions from libc.
 extern:printf:*:0
+extern:snprintf:*:1
 extern:puts:1:0
 extern:atoi:1:1
 extern:malloc:1:1
@@ -151,8 +152,20 @@ endvars
 	str :str_len =length
 	length WORDSIZE + :malloc =result
 	length 0 result @=
-	result WORDSIZE + str :to_char* length :memmove
+	result :to_char* str :to_char* length :memmove
 	result
+endfunc
+
+# Test if a string starts with another.
+function:str_startswith
+	arg:prefix
+	arg:str
+endvars
+	# Make sure the prefix is not longer than the overall string.
+	prefix :str_len str :str_len > if
+		0 return
+	end
+	prefix :to_char* str :to_char* prefix :str_len :memcmp 0 ==
 endfunc
 
 # Compare strings.
@@ -227,6 +240,76 @@ endvars
 	new_length 0 result @=
 	result WORDSIZE + str :to_char* count + new_length :memmove
 	result
+endfunc
+
+# Shorten string in place
+function:str_shorten_in_place
+	arg:count
+	arg:str
+
+	var:len
+endvars
+	str :str_len =len
+	str :to_char* str :to_char* count + len count - :memmove
+	len count - 0 str @=
+endfunc
+
+# Reallocate a string, with one more character on the end.
+function:realloc_and_append_char
+	arg:c
+	arg:s
+	var:buf
+endvars
+	"1" :str_duplicate =buf
+	c 0 buf :to_char* @c=
+	s
+		s buf :str_concat =s
+	:free
+	buf :free
+	s
+endfunc
+
+# Split a string based on a separator, and leave the splits on the stack.
+function:str_split
+	arg:str
+	arg:separator
+	arg:count
+
+	var:accumulator
+	var:i
+	var:len
+endvars
+	# Make a copy so our shortening won't affect the main one.
+	str :str_duplicate =str
+	"" :str_duplicate =accumulator
+	str :str_len =len
+	loop
+		str :str_len while
+#		'Remaining string: (%s)\n' str :to_char* :printf:2
+		# Check if the string separates here.
+		separator str :str_startswith count 0 > & if
+			accumulator # Returned value.
+			"" :str_duplicate =accumulator
+			# Move over by the size of the
+			separator :str_len str :str_shorten_in_place
+			count 1 - =count
+		else
+			# If not, then move a character over.
+			0 str :str_@ accumulator :realloc_and_append_char =accumulator
+			1 str :str_shorten_in_place
+		end
+	end
+	accumulator
+	# Make sure we have the right number pasted.
+	# Here's the value:
+#	'The value of count when we\'re done: %i\n' count :printf:2
+	loop
+		count 0 > while
+		""
+		count 1 - =count
+	end
+	# Free the duplicated string.
+	str :free
 endfunc
 
 # ========== Lists.
@@ -321,6 +404,23 @@ function:list_@=
 	arg:x arg:index arg:l
 endvars
 	x index l :list_index_wrap l :list_buf @=
+endfunc
+
+function:list_get_index_of_str
+	arg:s arg:l
+	var:i
+	var:len var:keys
+endvars
+	l :list_len =len
+	0 =i
+	loop
+		i len < while
+		i l :list_@ s :str_cmp if
+			i return
+		end
+		i 1 + =i
+	end
+	-1
 endfunc
 
 # Add a single value into a list.
@@ -446,6 +546,7 @@ function:dict_set
 	arg:x arg:s arg:d
 	var:i
 endvars
+	s :str_duplicate =s
 	s d :dict_get_index =i
 	i -1 != if
 		# If the string is already in the dictionary, then just change the value.
@@ -466,7 +567,25 @@ endvars
 	i -1 == if
 		"Key " s :str_concat " not in dictionary." :str_concat :exception
 	end
+	# Free the key.
+	i d :dict_keys :list_@ :free
 	i d :dict_keys :list_erase
 	i d :dict_values :list_erase
+endfunc
+
+# Convert an integer into a string.
+function:int_to_str
+	arg:x
+	var:len
+	var:buf
+endvars
+	0 0 '%i' x :snprintf:4 =len
+	len WORDSIZE + 1 + :malloc =buf
+	# Write in the length field.
+	len 0 buf @=
+	# Write in the actual itoaed string.
+	buf WORDSIZE + len 1 + '%i' x :snprintf:4 drop
+	# I'm pretty sure that snprintf will guarantee null termination.
+	buf
 endfunc
 

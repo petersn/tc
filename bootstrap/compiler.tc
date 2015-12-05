@@ -2,6 +2,12 @@
 
 include:default.tc
 
+# For now, until not works.
+function:not
+endvars
+	0 ==
+endfunc
+
 function:print_list
 	arg:l
 	var:i var:len
@@ -20,17 +26,188 @@ endvars
 	0 swap @c
 endfunc
 
+function:add_static_string
+	arg:s
+	arg:static_strings
+	var:i
+	var:len
+	var:index
+endvars
+	s static_strings :dict_in if
+		s static_strings :dict_get return
+	end
+	static_strings :dict_len :int_to_str =index
+	"string" index :str_concat # Returned value generated here!
+	dup s static_strings :dict_set
+	index :free
+endfunc
+
+function:get_tag
+	arg:tag_counter_pointer
+	var:counter
+	var:temp
+endvars
+	0 tag_counter_pointer @ =counter
+	counter 1 + 0 tag_counter_pointer @=
+	# Build up a tag out of it.
+	"tag" counter :int_to_str dup =temp :str_concat # Returned value here.
+	temp :free
+endfunc
+
+# Constants.
+const:TARGET_WORDSIZE:8
+const:PARSE_MAIN:1
+const:PARSE_COMMENT:2
+const:PARSE_STRING:3
+const:PARSE_STRING_ESCAPE:4
+const:PARSE_ASM:5
+
+# struct Flow
+const:FLOW_WORDS:3
+const:FLOW_CODE:0
+const:FLOW_BREAK_TAG:1
+const:FLOW_CONTINUE_TAG:2
+
+function:new_flow
+	arg:code
+	arg:break_tag
+	arg:continue_tag
+	var:flow
+endvars
+	FLOW_WORDS :malloc =flow
+	code FLOW_CODE flow @=
+	break_tag FLOW_BREAK_TAG flow @=
+	continue_tag FLOW_CONTINUE_TAG flow @=
+	flow
+endfunc
+
+# struct Extern
+const:EXTERN_WORDS:3
+const:EXTERN_NAME:0
+const:EXTERN_NUM_ARGS:1
+const:EXTERN_DOES_RETURN:2
+
+function:new_extern
+	arg:name
+	arg:num_args
+	arg:does_return
+	var:extern
+endvars
+	EXTERN_WORDS :malloc =extern
+	name EXTERN_NAME extern @=
+	num_args EXTERN_NUM_ARGS extern @=
+	does_return EXTERN_DOES_RETURN extern @=
+	extern
+endfunc
+
+# struct Function
+const:FUNCTION_WORDS:6
+const:FUNCTION_NAME:0
+const:FUNCTION_LOCALS:1
+const:FUNCTION_ARGS:2
+const:FUNCTION_START_TAG:3
+const:FUNCTION_RETURN_TAG:4
+const:FUNCTION_END_TAG:5
+
+function:new_function
+	arg:tag_counter_pointer
+	arg:name
+	var:func
+endvars
+	FUNCTION_WORDS :malloc =func
+	name FUNCTION_NAME func @=
+	# Create the lists.
+	:new_list FUNCTION_LOCALS func @=
+	:new_list FUNCTION_ARGS func @=
+	tag_counter_pointer :get_tag FUNCTION_START_TAG func @=
+	tag_counter_pointer :get_tag FUNCTION_RETURN_TAG func @=
+	tag_counter_pointer :get_tag FUNCTION_END_TAG func @=
+	func
+endfunc
+
+function:function_assign
+	arg:name
+	arg:self
+	var:offset
+endvars
+	name FUNCTION_LOCALS self @ :list_get_index_of_str TARGET_WORDSIZE * =offset
+	"pop qword [r15-" offset :int_to_str :str_concat "]" :str_concat
+endfunc
+
+function:function_access
+	arg:name
+	arg:self
+	var:offset
+endvars
+	name FUNCTION_LOCALS self @ :list_get_index_of_str TARGET_WORDSIZE * =offset
+	"push qword [r15-" offset :int_to_str :str_concat "]" :str_concat
+endfunc
+
+function:function_build_preamble
+	arg:static_strings
+	arg:self
+	var:core
+	var:i
+	var:len
+	var:arg
+endvars
+	"%s:\nmov rax, [TracebackStackPointer]\nadd rax, 8\nmov qword [rax], "
+	FUNCTION_NAME self @ static_strings :add_static_string :str_concat
+	"\nadd qword [TracebackStackPointer], 8\npop qword [r15+8]\nadd r15, " :str_concat
+	# Compute the number of bytes required on the call stack.
+	FUNCTION_LOCALS self @ :list_len 1 + TARGET_WORDSIZE * :int_to_str :str_concat
+	=core
+
+	# Iterate backwards over ARGS.
+	FUNCTION_ARGS self @ :list_len =len
+	0 =i
+	loop
+		i >= 0 while
+		i FUNCTION_ARGS self @ :list_@ =arg
+		# Add an assignment into the target variable.
+		core
+			core arg self :function_assign :str_concat =core
+		:free
+		i 1 - =i
+	end
+endfunc
+
+function:get_from_flow
+	arg:index
+	arg:flow_stack
+	var:len
+	var:i
+	var:flow
+	var:str
+endvars
+	flow_stack :list_len =len
+	len 1 - =i
+	loop
+		i 0 >= while
+		i flow_stack :list_@ =flow
+		index flow @ =str
+		str 0 != if
+			str return
+		end
+		i 1 - =i
+	end
+	"Control flow out of place." :exception
+endfunc
+
 function:compile
 	arg:input_string
 
 	# Basic data structures.
 	var:output_code
-	var:strings
+	var:static_strings
 	var:flow_stack
 
 	var:externs
-	var:functions
+	var:functions_table
 	var:current_function
+	var:predefined
+
+	var:tag_counter_pointer
 
 	# Parsing data.
 	var:parse_mode
@@ -40,18 +217,46 @@ function:compile
 	var:is_whitespace
 	var:token
 	var:string_literal
-	var:char_buf_string
+	var:asm_literal
+	var:eight_byte_buf_string
 
-	# Constants.
-	var:PARSE_MAIN
-	var:PARSE_COMMENT
-	var:PARSE_STRING
+	# Temporaries.
+	var:c
+	var:i
+	var:tag
+	var:flow
+	var:name
+	var:func
 endvars
-	1 =PARSE_MAIN
-	2 =PARSE_COMMENT
-	3 =PARSE_STRING
+	# Allocate the tag counter.
+	WORDSIZE :malloc =tag_counter_pointer
 
-	" " :str_duplicate =char_buf_string
+	# Make a list of ""-strings.
+	:new_list =output_code
+	:new_list =flow_stack
+	:new_dict =static_strings
+	:new_dict =predefined
+	:new_dict =functions_table
+
+	"pop rax\nadd [rsp], rax" "+" predefined :dict_set
+	"pop rax\nsub [rsp], rax" "-" predefined :dict_set
+	"pop rax\nimul qword [rsp]\nmov [rsp], rax" "*" predefined :dict_set
+	"pop rbx\npop rax\nxor rdx, rdx\nidiv rbx\npush rax" "/" predefined :dict_set
+	"pop rbx\npop rax\nxor rdx, rdx\nidiv rbx\npush rdx" "%" predefined :dict_set
+	"pop rax\nor [rsp], rax" "|" predefined :dict_set
+	"pop rax\nand [rsp], rax" "&" predefined :dict_set
+	"NOT IMPLEMENTED YET" "not" predefined :dict_set
+	"pop rax\npop rbx\npush qword [rax+rbx*8]" "@" predefined :dict_set
+	"pop rax\npop rbx\npop qword [rax+rbx*8]" "@=" predefined :dict_set
+	"pop rax\npop rbx\nxor rcx, rcx\nmov cl, [rax+rbx]\npush rcx" "@c" predefined :dict_set
+	"pop rax\npop rbx\npop rcx\nmov [rax+rbx], cl" "@c=" predefined :dict_set
+	"pop rbx\npop rax\nxor rdx, rdx\nidiv rbx\npush rax\npush rdx" "divmod" predefined :dict_set
+	"pop rax" "drop" predefined :dict_set
+	"push qword [rsp]" "dup" predefined :dict_set
+	"pop rax\npop rbx\npush rax\npush rbx" "swap" predefined :dict_set
+	"push 8" "WORDSIZE" predefined :dict_set
+
+	"12345678" :str_duplicate =eight_byte_buf_string
 
 	PARSE_MAIN =parse_mode
 	0 =text_index
@@ -67,7 +272,43 @@ endvars
 			# Check if we've hit the end of a valid token.
 			is_whitespace if
 				token :str_len 0 != if
-					'Got token: (%i) ' token :str_len :printf:2 token :to_char* :puts
+					# === Main pass with the token here:
+#					'Got token: (%i) ' token :str_len :printf:2 token :to_char* :puts
+					token predefined :dict_in if
+						token predefined :dict_get output_code :list_append
+					end
+					":" token :str_startswith if
+#						"Function calling not implemented yet: " token :str_concat :exception
+					end
+					"if" token :str_cmp if
+						tag_counter_pointer :get_tag =tag
+						"pop rax\ncmp rax, 0\nje " tag :str_concat output_code :list_append
+						tag ":" :str_concat 0 0 :new_flow flow_stack :list_append
+					end
+					"function:" token :str_startswith if
+						token ":" 1 :str_split =name drop
+						tag_counter_pointer name :new_function =func
+						func name functions_table :dict_set
+						"; ========== " name :str_concat " ==========\njmp " :str_concat
+						FUNCTION_END_TAG func @ :str_concat
+						output_code :list_append
+					end
+					"end" token :str_cmp if
+						flow_stack :list_pop =flow
+						# Free the break tag and continue tag.
+						# We're taking advantage of the fact that freeing 0 is safe.
+						FLOW_BREAK_TAG flow @ :free
+						FLOW_CONTINUE_TAG flow @ :free
+						FLOW_CODE flow @ output_code :list_append
+						flow :free
+					end
+					">>>" token :str_cmp if
+						PARSE_ASM =parse_mode
+						"" :str_duplicate =asm_literal
+					end
+					"__ENABLE_LINE_BY_LINE_DEBUGGING__" token :str_cmp if
+						'Warning: Line-by-line debugging not implemented.' :puts
+					end
 					token :free
 					"" :str_duplicate =token
 				end
@@ -79,25 +320,69 @@ endvars
 				"" :str_duplicate =string_literal
 			else
 				# Otherwise, it's a character to be appended on.
-				char 0 char_buf_string :to_char* @c=
-				token
-					token char_buf_string :str_concat =token
-				:free
+				char token :realloc_and_append_char =token
 			end end end
 		else parse_mode PARSE_COMMENT == '\n' :ord char == & if
 			PARSE_MAIN =parse_mode
 		else parse_mode PARSE_STRING == if
-			# TODO: Keep writing here.
-			# This code is currently wrong, and we're segfaulting here.
-			'"' :ord char == not if
+			'"' :ord char == string_mode_is_cstring :not &
+			'\'' :ord char == string_mode_is_cstring & | if
+				# Assert the token is none.
+				token :str_len 0 != if
+					"Token must be empty when a string literal finishes!" :exception
+				end
+				PARSE_MAIN =parse_mode
+				# If the string is a double quoted string then we prepend the length.
+				string_literal :str_len 0 eight_byte_buf_string :to_char* @=
+				string_mode_is_cstring :not if
+					string_literal
+						eight_byte_buf_string string_literal :str_concat =string_literal
+					:free
+				end
+				# TODO: The actual string processing!
+				string_literal static_strings :add_static_string =tag
+				"push " tag :str_concat output_code :list_append
+				# Then free the string literal.
+				string_literal :free
+				"" :str_duplicate =string_literal
+			else '\\' :ord char == if
+				PARSE_STRING_ESCAPE =parse_mode
+			else
+				# Add the character onto the string literal.
+				char string_literal :realloc_and_append_char =string_literal
+			end end
+		else parse_mode PARSE_STRING_ESCAPE == if
+			# Check.
+			char =c
+			char 'n' :ord == if
+				'\n' :ord =c
+			else char 't' :ord == if
+				'\t' :ord =c
+			else char '0' :ord == if
+				'\0' :ord =c
+			end end end
+			c string_literal :realloc_and_append_char =string_literal
+			PARSE_STRING =parse_mode
+		else parse_mode PARSE_ASM == if
+			char '\n' :ord == if
+				asm_literal output_code :list_append
+				PARSE_MAIN =parse_mode
+			else
+				char asm_literal :realloc_and_append_char =asm_literal
 			end
-		else
-#			'Mode: %i\n' parse_mode :printf:2
-#			"Shouldn't get here: " token :str_concat "." :str_concat :exception
-		end end end
+		end end end end end
 
 		text_index 1 + =text_index
 	end
+
+	# Join up output_code to produce a result.
+	0 =i
+	loop
+		i output_code :list_len < while
+		i output_code :list_@ :to_char* :puts
+		i 1 + =i
+	end
+
 endfunc
 
 function:main
